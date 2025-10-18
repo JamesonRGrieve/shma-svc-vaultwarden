@@ -13,6 +13,47 @@
   set_fact:
     infrastructure_template_root: "{{ [role_path | dirname, 'infrastructure', 'templates'] | path_join }}"
 
+- name: Normalize service packages and services for targeted runtimes
+  set_fact:
+    service_packages: "{{ vaultwarden_service_packages if 'baremetal' in service_target_runtimes else [] }}"
+    service_services: "{{ vaultwarden_service_services if 'baremetal' in service_target_runtimes else [] }}"
+
+- name: Calculate deployment metadata
+  set_fact:
+    vaultwarden_effective_replicas: "{{ (service_replicas | default(1)) | int }}"
+
+- name: Determine if admin token hardening applies
+  set_fact:
+    vaultwarden_require_admin_token: "{{ (production | default(false)) or (service_target_runtimes | difference(['dev']) | length > 0) }}"
+
+- name: Enforce non-default admin token in hardened modes
+  assert:
+    that:
+      - vaultwarden_admin_token != 'change-me-vaultwarden-admin'
+    fail_msg: "ADMIN_TOKEN must be rotated from the default when deploying outside of dev or when production=true."
+  when: vaultwarden_require_admin_token
+
+- name: Disallow cleartext PostgreSQL URLs
+  assert:
+    that:
+      - (vaultwarden_database_url_secret | length) > 0
+    fail_msg: "PostgreSQL DATABASE_URL must be sourced from an encrypted secret (SOPS/age). Set vaultwarden_database_url_secret."
+  when: vaultwarden_database_backend == 'postgres' and (vaultwarden_database_url is match('^postgres(ql)?://'))
+
+- name: Prevent scaling beyond one replica on SQLite
+  assert:
+    that:
+      - vaultwarden_effective_replicas == 1
+    fail_msg: "SQLite backend only supports a single replica. Configure PostgreSQL and shared storage before scaling."
+  when: vaultwarden_database_backend == 'sqlite'
+
+- name: Require PostgreSQL when scaling beyond a single replica
+  assert:
+    that:
+      - vaultwarden_database_backend == 'postgres'
+    fail_msg: "Scaling Vaultwarden past one replica requires a PostgreSQL backend and shared storage (RWX)."
+  when: vaultwarden_effective_replicas > 1
+
 - name: Build runtime template map
   set_fact:
     service_runtime_templates: "{{ service_runtime_templates | default({}) | combine({ item.key: ([infrastructure_template_root, item.value] | path_join) }) }}"
