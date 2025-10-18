@@ -13,6 +13,13 @@
   set_fact:
     infrastructure_template_root: "{{ [role_path | dirname, 'infrastructure', 'templates'] | path_join }}"
 
+- name: Build runtime template map
+  set_fact:
+    service_runtime_templates: "{{ service_runtime_templates | default({}) | combine({ item.key: ([infrastructure_template_root, item.value] | path_join) }) }}"
+  loop: "{{ runtime_templates | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
 - name: Normalize service packages and services for targeted runtimes
   set_fact:
     service_packages: "{{ vaultwarden_service_packages if 'baremetal' in service_target_runtimes else [] }}"
@@ -22,9 +29,96 @@
   set_fact:
     vaultwarden_effective_replicas: "{{ (service_replicas | default(1)) | int }}"
 
+- name: Load previous replica count from fact cache
+  set_fact:
+    vaultwarden_previous_replicas: "{{ ansible_facts.get('vaultwarden_previous_replicas', vaultwarden_effective_replicas) }}"
+
+- name: Load previous database backend from fact cache
+  set_fact:
+    vaultwarden_previous_database_backend: "{{ ansible_facts.get('vaultwarden_previous_database_backend', vaultwarden_database_backend) }}"
+
+- name: Define base service port bindings
+  set_fact:
+    vaultwarden_service_ports: "{{ [
+      {
+        'target': 80,
+        'published': vaultwarden_service_port,
+        'protocol': 'tcp',
+        'host_ip': vaultwarden_bind_address
+      }
+    ] }}"
+
+- name: Append WebSocket port binding when enabled
+  set_fact:
+    vaultwarden_service_ports: "{{ vaultwarden_service_ports + [
+      {
+        'target': 3012,
+        'published': vaultwarden_websocket_port,
+        'protocol': 'tcp',
+        'host_ip': vaultwarden_bind_address
+      }
+    ] }}"
+  when: vaultwarden_websocket_enabled
+
+- name: Expose service port definitions to runtimes
+  set_fact:
+    service_ports: "{{ vaultwarden_service_ports }}"
+
+- name: Define base service volumes
+  set_fact:
+    vaultwarden_service_volumes:
+      - name: data
+        source: "{{ vaultwarden_data_volume }}"
+        target: "{{ vaultwarden_data_volume_target }}"
+        driver: local
+        size: "{{ vaultwarden_data_volume_size_gb }}Gi"
+
+- name: Append email template bind mount when configured
+  set_fact:
+    vaultwarden_service_volumes: "{{ vaultwarden_service_volumes + [
+      {
+        'name': 'email-templates',
+        'source': vaultwarden_email_templates_path,
+        'target': '/etc/vaultwarden/email-templates',
+        'type': 'bind'
+      }
+    ] }}"
+  when: (vaultwarden_email_templates_path | string | length) > 0
+
+- name: Expose service volume definitions to runtimes
+  set_fact:
+    service_volumes: "{{ vaultwarden_service_volumes }}"
+
+- name: Derive PostgreSQL connection pool default
+  set_fact:
+    vaultwarden_database_max_conns_effective: "{{ (10 + (vaultwarden_effective_replicas * 5)) | string }}"
+  when:
+    - vaultwarden_database_backend == 'postgres'
+    - (vaultwarden_database_max_conns | string | length) == 0
+
+- name: Prepare environment variable mapping for templating
+  set_fact:
+    vaultwarden_env_items: "{{ vaultwarden_env_mapping | dict2items }}"
+
+- name: Collect required environment entries
+  set_fact:
+    vaultwarden_required_env_items: "{{ vaultwarden_env_items | selectattr('value.required', 'equalto', true) | list }}"
+
+- name: Collect optional environment entries with values
+  set_fact:
+    vaultwarden_optional_env_items: "{{ vaultwarden_env_items | selectattr('value.required', 'equalto', false) | selectattr('value.value', 'defined') | selectattr('value.value', 'truthy') | list }}"
+
+- name: Build final Vaultwarden environment list
+  set_fact:
+    vaultwarden_service_env: "{{ (vaultwarden_required_env_items + vaultwarden_optional_env_items) | map(attribute='value') | list }}"
+
+- name: Publish environment configuration for runtimes
+  set_fact:
+    service_env: "{{ vaultwarden_service_env }}"
+
 - name: Calculate expected WebSocket allocations
   set_fact:
-    vaultwarden_expected_websocket_allocations: "{{ vaultwarden_websocket_enabled | ternary(1, 0) }}"
+    vaultwarden_expected_websocket_allocations: "{{ vaultwarden_effective_replicas * (vaultwarden_websocket_enabled | ternary(1, 0)) }}"
 
 - name: Build inventory service port registry
   set_fact:
@@ -32,7 +126,7 @@
 
 - name: Detect WebSocket port reuse across services
   set_fact:
-    vaultwarden_websocket_port_conflicts: "{{ vaultwarden_inventory_published_ports | selectattr('published', 'equalto', vaultwarden_websocket_port) | list }}"
+    vaultwarden_websocket_port_conflicts: "{{ vaultwarden_inventory_published_ports | calculate_port_conflicts(vaultwarden_websocket_port) }}"
 
 - name: Guard against WebSocket port conflicts
   assert:
@@ -55,23 +149,61 @@
 - name: Require Argon2id-hashed admin token
   assert:
     that:
-      - vaultwarden_admin_token is match('^\\$argon2id\\$')
+      - vaultwarden_admin_token is match('^\\$argon2id\\$v=\\d+\\$m=\\d+,t=\\d+,p=\\d+\\$[A-Za-z0-9+/]+\\$[A-Za-z0-9+/]+$')
     fail_msg: "ADMIN_TOKEN must be an Argon2id hash generated via `vaultwarden hash`. Plaintext passwords are rejected."
   when: vaultwarden_admin_token != 'change-me-vaultwarden-admin'
+
+- name: Prevent disabling the read-only root filesystem outside debug mode
+  assert:
+    that:
+      - vaultwarden_debug_mode | bool
+    fail_msg: "Read-only root filesystem is required for production. Set vaultwarden_debug_mode: true to override."
+  when: not vaultwarden_read_only_root_filesystem
+
+- name: Block database backend switches without migration plan
+  assert:
+    that:
+      - vaultwarden_force_backend_switch | bool
+    fail_msg: "Detected change from {{ vaultwarden_previous_database_backend }} to {{ vaultwarden_database_backend }}. Run the Vaultwarden migrator before switching backends or set vaultwarden_force_backend_switch: true to acknowledge the risk."
+  when:
+    - vaultwarden_previous_database_backend is defined
+    - vaultwarden_previous_database_backend != vaultwarden_database_backend
+    - not vaultwarden_force_backend_switch
 
 - name: Disallow cleartext PostgreSQL URLs
   assert:
     that:
       - (vaultwarden_database_url_secret | length) > 0
     fail_msg: "PostgreSQL DATABASE_URL must be sourced from an encrypted secret (SOPS/age). Set vaultwarden_database_url_secret."
-  when: vaultwarden_database_backend == 'postgres' and (vaultwarden_database_url is match('^postgres(ql)?://'))
+  when: vaultwarden_database_backend == 'postgres' and (vaultwarden_database_url is match('^postgres(ql)?://[^/]+/'))
+
+- name: Validate admin IP allowlist entries
+  assert:
+    that:
+      - item is ansible.utils.ipaddr
+    fail_msg: "Admin IP allowlist entry '{{ item }}' is not a valid IP or CIDR network."
+  loop: "{{ vaultwarden_admin_ip_allowlist }}"
+  when: (vaultwarden_admin_ip_allowlist | length) > 0
+  loop_control:
+    label: "{{ item }}"
+
+- name: Ensure signups are disabled after admin bootstrap
+  assert:
+    that:
+      - not vaultwarden_signups_allowed | bool
+    fail_msg: "Signups are still enabled after admin bootstrap. Set vaultwarden_signups_allowed: false and redeploy."
+  when:
+    - vaultwarden_admin_token != 'change-me-vaultwarden-admin'
+    - vaultwarden_signups_allowed | bool
 
 - name: Prevent scaling beyond one replica on SQLite
   assert:
     that:
       - vaultwarden_effective_replicas == 1
     fail_msg: "SQLite backend only supports a single replica. Configure PostgreSQL and shared storage before scaling."
-  when: vaultwarden_database_backend == 'sqlite'
+  when:
+    - vaultwarden_database_backend == 'sqlite'
+    - vaultwarden_effective_replicas > 1 or vaultwarden_previous_replicas != vaultwarden_effective_replicas
 
 - name: Require PostgreSQL when scaling beyond a single replica
   assert:
@@ -80,18 +212,53 @@
     fail_msg: "Scaling Vaultwarden past one replica requires a PostgreSQL backend and shared storage (RWX)."
   when: vaultwarden_effective_replicas > 1
 
+- name: Gather PVC details for PostgreSQL multi-replica deployments
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: PersistentVolumeClaim
+    name: "{{ vaultwarden_database_pvc_name }}"
+    namespace: "{{ vaultwarden_kubernetes_namespace }}"
+  register: vaultwarden_database_pvc
+  when:
+    - 'kubernetes' in service_target_runtimes
+    - vaultwarden_effective_replicas > 1
+    - vaultwarden_database_backend == 'postgres'
+    - (vaultwarden_database_pvc_name | string | length) > 0
+
+- name: Validate PVC supports ReadWriteMany access
+  assert:
+    that:
+      - (vaultwarden_database_pvc.resources | default([])) | length > 0
+      - 'ReadWriteMany' in (vaultwarden_database_pvc.resources[0].spec.accessModes | default([]))
+    fail_msg: "PostgreSQL storage must expose ReadWriteMany access when running multiple replicas."
+  when:
+    - 'kubernetes' in service_target_runtimes
+    - vaultwarden_effective_replicas > 1
+    - vaultwarden_database_backend == 'postgres'
+    - (vaultwarden_database_pvc_name | string | length) > 0
+
 - name: Warn when WebSockets are disabled
   debug:
     msg: "Vaultwarden WebSockets are disabled. Real-time sync for desktop, browser, and mobile clients will fall back to polling."
     warn: true
   when: not vaultwarden_websocket_enabled
 
-- name: Build runtime template map
+- name: Ensure exports omit WebSocket port when disabled
+  assert:
+    that:
+      - (vaultwarden_exports_env | selectattr('name', 'equalto', 'APP_WS_PORT') | list | length) == 0
+    fail_msg: "APP_WS_PORT must not be present in exports.env when WebSockets are disabled."
+  when: not vaultwarden_websocket_enabled
+
+- name: Persist Vaultwarden scaling metadata
   set_fact:
-    service_runtime_templates: "{{ service_runtime_templates | default({}) | combine({ item.key: ([infrastructure_template_root, item.value] | path_join) }) }}"
-  loop: "{{ runtime_templates | dict2items }}"
-  loop_control:
-    label: "{{ item.key }}"
+    vaultwarden_previous_replicas: "{{ vaultwarden_effective_replicas }}"
+  cacheable: true
+
+- name: Persist Vaultwarden database backend choice
+  set_fact:
+    vaultwarden_previous_database_backend: "{{ vaultwarden_database_backend }}"
+  cacheable: true
 
 - name: Ensure requested runtimes are supported
   assert:
