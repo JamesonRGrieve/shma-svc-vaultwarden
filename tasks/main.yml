@@ -22,6 +22,25 @@
   set_fact:
     vaultwarden_effective_replicas: "{{ (service_replicas | default(1)) | int }}"
 
+- name: Calculate expected WebSocket allocations
+  set_fact:
+    vaultwarden_expected_websocket_allocations: "{{ vaultwarden_websocket_enabled | ternary(1, 0) }}"
+
+- name: Build inventory service port registry
+  set_fact:
+    vaultwarden_inventory_published_ports: "{{ hostvars | dict2items | map(attribute='value') | selectattr('service_ports', 'defined') | map(attribute='service_ports') | list | sum(start=[]) }}"
+
+- name: Detect WebSocket port reuse across services
+  set_fact:
+    vaultwarden_websocket_port_conflicts: "{{ vaultwarden_inventory_published_ports | selectattr('published', 'equalto', vaultwarden_websocket_port) | list }}"
+
+- name: Guard against WebSocket port conflicts
+  assert:
+    that:
+      - (vaultwarden_websocket_port_conflicts | length) <= vaultwarden_expected_websocket_allocations
+    fail_msg: "WebSocket port {{ vaultwarden_websocket_port }} is already allocated by another service. Choose a unique port for Vaultwarden notifications."
+  when: vaultwarden_websocket_enabled
+
 - name: Determine if admin token hardening applies
   set_fact:
     vaultwarden_require_admin_token: "{{ (production | default(false)) or (service_target_runtimes | difference(['dev']) | length > 0) }}"
@@ -32,6 +51,13 @@
       - vaultwarden_admin_token != 'change-me-vaultwarden-admin'
     fail_msg: "ADMIN_TOKEN must be rotated from the default when deploying outside of dev or when production=true."
   when: vaultwarden_require_admin_token
+
+- name: Require Argon2id-hashed admin token
+  assert:
+    that:
+      - vaultwarden_admin_token is match('^\\$argon2id\\$')
+    fail_msg: "ADMIN_TOKEN must be an Argon2id hash generated via `vaultwarden hash`. Plaintext passwords are rejected."
+  when: vaultwarden_admin_token != 'change-me-vaultwarden-admin'
 
 - name: Disallow cleartext PostgreSQL URLs
   assert:
@@ -53,6 +79,12 @@
       - vaultwarden_database_backend == 'postgres'
     fail_msg: "Scaling Vaultwarden past one replica requires a PostgreSQL backend and shared storage (RWX)."
   when: vaultwarden_effective_replicas > 1
+
+- name: Warn when WebSockets are disabled
+  debug:
+    msg: "Vaultwarden WebSockets are disabled. Real-time sync for desktop, browser, and mobile clients will fall back to polling."
+    warn: true
+  when: not vaultwarden_websocket_enabled
 
 - name: Build runtime template map
   set_fact:
