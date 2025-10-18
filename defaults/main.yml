@@ -5,22 +5,58 @@ service_image: docker.io/vaultwarden/server:1.32.5-alpine
 version: "1.32.5"
 needs_container_runtime: true
 service_ip: "{{ vaultwarden_container_ip }}"
-service_ports:
-  - target: 80
-    published: {{ vaultwarden_service_port }}
-    protocol: tcp
-    host_ip: "{{ vaultwarden_bind_address }}"
-  - target: 3012
-    published: {{ vaultwarden_websocket_port }}
-    protocol: tcp
-    host_ip: "{{ vaultwarden_bind_address }}"
+service_ports: >-
+  {{
+    [
+      {
+        'target': 80,
+        'published': vaultwarden_service_port,
+        'protocol': 'tcp',
+        'host_ip': vaultwarden_bind_address
+      }
+    ]
+    + (
+      vaultwarden_websocket_enabled
+      | ternary(
+        [
+          {
+            'target': 3012,
+            'published': vaultwarden_websocket_port,
+            'protocol': 'tcp',
+            'host_ip': vaultwarden_bind_address
+          }
+        ],
+        []
+      )
+    )
+  }}
 service_env: "{{ vaultwarden_service_env }}"
-service_volumes:
-  - name: data
-    source: "{{ vaultwarden_data_volume }}"
-    target: /data
-    driver: local
-    size: "{{ vaultwarden_data_volume_size_gb }}Gi"
+service_volumes: >-
+  {{
+    [
+      {
+        'name': 'data',
+        'source': vaultwarden_data_volume,
+        'target': '/data',
+        'driver': 'local',
+        'size': vaultwarden_data_volume_size_gb ~ 'Gi'
+      }
+    ]
+    + (
+      (vaultwarden_email_templates_path | string | length) > 0
+      | ternary(
+        [
+          {
+            'name': 'email-templates',
+            'source': vaultwarden_email_templates_path,
+            'target': '/etc/vaultwarden/email-templates',
+            'type': 'bind'
+          }
+        ],
+        []
+      )
+    )
+  }}
 service_resources:
   memory_mb: "{{ vaultwarden_container_memory_mb }}"
   cpu_cores: "{{ vaultwarden_container_cpu_cores }}"
@@ -118,6 +154,7 @@ vaultwarden_signups_allowed: "{{ lookup('env', 'VAULTWARDEN_SIGNUPS_ALLOWED') | 
 vaultwarden_invitations_allowed: "{{ lookup('env', 'VAULTWARDEN_INVITATIONS_ALLOWED') | default('true', true) | bool }}"
 vaultwarden_show_password_hint: "{{ lookup('env', 'VAULTWARDEN_SHOW_PASSWORD_HINT') | default('false', true) | bool }}"
 vaultwarden_websocket_enabled: "{{ lookup('env', 'VAULTWARDEN_WEBSOCKET_ENABLED') | default('true', true) | bool }}"
+vaultwarden_require_2fa: "{{ lookup('env', 'VAULTWARDEN_REQUIRE_2FA') | default('false', true) | bool }}"
 vaultwarden_log_level: "{{ lookup('env', 'VAULTWARDEN_LOG_LEVEL') | default('info', true) }}"
 vaultwarden_extended_logging: "{{ lookup('env', 'VAULTWARDEN_EXTENDED_LOGGING') | default('true', true) | bool }}"
 vaultwarden_timezone: "{{ lookup('env', 'VAULTWARDEN_TZ') | default('UTC', true) }}"
@@ -127,6 +164,28 @@ vaultwarden_cache_tmpfs_enabled: false
 vaultwarden_cache_tmpfs_size: 64Mi
 vaultwarden_rocket_workers: "{{ lookup('env', 'VAULTWARDEN_ROCKET_WORKERS') | default('', true) }}"
 vaultwarden_send_file_max_bytes: "{{ lookup('env', 'VAULTWARDEN_SEND_FILE_MAX_BYTES') | default('', true) }}"
+vaultwarden_database_max_conns: "{{ lookup('env', 'VAULTWARDEN_DATABASE_MAX_CONNS') | default('', true) }}"
+vaultwarden_admin_ip_allowlist: []
+vaultwarden_max_attachment_size: "{{ lookup('env', 'VAULTWARDEN_MAX_ATTACHMENT_SIZE') | default('', true) }}"
+vaultwarden_attachment_storage_quota: "{{ lookup('env', 'VAULTWARDEN_ATTACHMENT_STORAGE_QUOTA') | default('', true) }}"
+vaultwarden_attachments_backend: "{{ lookup('env', 'VAULTWARDEN_ATTACHMENTS_BACKEND') | default('filesystem', true) }}"
+vaultwarden_attachments_s3_endpoint: "{{ lookup('env', 'VAULTWARDEN_ATTACHMENTS_S3_ENDPOINT') | default('', true) }}"
+vaultwarden_attachments_s3_region: "{{ lookup('env', 'VAULTWARDEN_ATTACHMENTS_S3_REGION') | default('', true) }}"
+vaultwarden_attachments_s3_bucket: "{{ lookup('env', 'VAULTWARDEN_ATTACHMENTS_S3_BUCKET') | default('', true) }}"
+vaultwarden_attachments_s3_access_key: "{{ lookup('env', 'VAULTWARDEN_ATTACHMENTS_S3_ACCESS_KEY') | default('', true) }}"
+vaultwarden_attachments_s3_secret_key: "{{ lookup('env', 'VAULTWARDEN_ATTACHMENTS_S3_SECRET_KEY') | default('', true) }}"
+vaultwarden_attachments_s3_path_style: "{{ lookup('env', 'VAULTWARDEN_ATTACHMENTS_S3_PATH_STYLE') | default('', true) }}"
+vaultwarden_clamav_host: "{{ lookup('env', 'VAULTWARDEN_CLAMAV_HOST') | default('', true) }}"
+vaultwarden_clamav_port: "{{ lookup('env', 'VAULTWARDEN_CLAMAV_PORT') | default('', true) }}"
+vaultwarden_offline_vault_timeout: "{{ lookup('env', 'VAULTWARDEN_OFFLINE_VAULT_TIMEOUT') | default('', true) }}"
+vaultwarden_smtp_host: "{{ lookup('env', 'VAULTWARDEN_SMTP_HOST') | default('', true) }}"
+vaultwarden_smtp_port: "{{ lookup('env', 'VAULTWARDEN_SMTP_PORT') | default('', true) }}"
+vaultwarden_smtp_security: "{{ lookup('env', 'VAULTWARDEN_SMTP_SECURITY') | default('', true) }}"
+vaultwarden_smtp_username: "{{ lookup('env', 'VAULTWARDEN_SMTP_USERNAME') | default('', true) }}"
+vaultwarden_smtp_password: "{{ lookup('env', 'VAULTWARDEN_SMTP_PASSWORD') | default('', true) }}"
+vaultwarden_smtp_from: "{{ lookup('env', 'VAULTWARDEN_SMTP_FROM') | default('', true) }}"
+vaultwarden_smtp_timeout: "{{ lookup('env', 'VAULTWARDEN_SMTP_TIMEOUT') | default('', true) }}"
+vaultwarden_email_templates_path: "{{ lookup('env', 'VAULTWARDEN_EMAIL_TEMPLATES_PATH') | default('', true) }}"
 vaultwarden_read_only_root_filesystem: true
 vaultwarden_service_env: >-
   {{
@@ -145,7 +204,7 @@ vaultwarden_service_env: >-
       },
       {
         'name': 'WEBSOCKET_PORT',
-        'value': '3012'
+        'value': vaultwarden_websocket_port | string
       },
       {
         'name': 'SIGNUPS_ALLOWED',
@@ -195,6 +254,244 @@ vaultwarden_service_env: >-
           {
             'name': 'SEND_FILE_MAX_BYTES',
             'value': vaultwarden_send_file_max_bytes
+          }
+        ],
+        []
+      )
+    )
+    + (
+      ((vaultwarden_database_max_conns | string | length) > 0)
+      | ternary(
+        [
+          {
+            'name': 'DATABASE_MAX_CONNS',
+            'value': vaultwarden_database_max_conns
+          }
+        ],
+        []
+      )
+    )
+    + (
+      vaultwarden_require_2fa
+      | ternary(
+        [
+          {
+            'name': 'REQUIRE_2FA',
+            'value': 'true'
+          }
+        ],
+        []
+      )
+    )
+    + (
+      (vaultwarden_admin_ip_allowlist | length) > 0
+      | ternary(
+        [
+          {
+            'name': 'ADMIN_IP_WHITELIST',
+            'value': (
+              vaultwarden_admin_ip_allowlist
+              if vaultwarden_admin_ip_allowlist is string
+              else (vaultwarden_admin_ip_allowlist | join(','))
+            )
+          }
+        ],
+        []
+      )
+    )
+    + (
+      (vaultwarden_max_attachment_size | string | length) > 0
+      | ternary(
+        [
+          {
+            'name': 'ATTACHMENTS_SIZE_LIMIT',
+            'value': vaultwarden_max_attachment_size
+          }
+        ],
+        []
+      )
+    )
+    + (
+      (vaultwarden_attachment_storage_quota | string | length) > 0
+      | ternary(
+        [
+          {
+            'name': 'ATTACHMENTS_LIMIT',
+            'value': vaultwarden_attachment_storage_quota
+          }
+        ],
+        []
+      )
+    )
+    + [
+      {
+        'name': 'ATTACHMENTS_BACKEND',
+        'value': vaultwarden_attachments_backend
+      }
+    ]
+    + (
+      (vaultwarden_attachments_backend | lower) == 's3'
+      | ternary(
+        [
+          {
+            'name': 'ATTACHMENTS_S3_ENDPOINT',
+            'value': vaultwarden_attachments_s3_endpoint
+          },
+          {
+            'name': 'ATTACHMENTS_S3_REGION',
+            'value': vaultwarden_attachments_s3_region
+          },
+          {
+            'name': 'ATTACHMENTS_S3_BUCKET',
+            'value': vaultwarden_attachments_s3_bucket
+          },
+          {
+            'name': 'ATTACHMENTS_S3_ACCESS_KEY',
+            'value': vaultwarden_attachments_s3_access_key
+          },
+          {
+            'name': 'ATTACHMENTS_S3_SECRET_KEY',
+            'value': vaultwarden_attachments_s3_secret_key
+          }
+        ]
+        | selectattr('value', 'defined')
+        | selectattr('value', 'truthy')
+        | list
+        + (
+          (vaultwarden_attachments_s3_path_style | string | length) > 0
+          | ternary(
+            [
+              {
+                'name': 'ATTACHMENTS_S3_PATH_STYLE',
+                'value': (
+                  (
+                    (vaultwarden_attachments_s3_path_style | string | lower) == 'true'
+                  )
+                  | ternary('true', 'false')
+                )
+              }
+            ],
+            []
+          )
+        ),
+        []
+      )
+    )
+    + (
+      ((vaultwarden_clamav_host | string | length) > 0)
+      | ternary(
+        [
+          {
+            'name': 'CLAMAV_HOST',
+            'value': vaultwarden_clamav_host
+          }
+        ],
+        []
+      )
+    )
+    + (
+      ((vaultwarden_clamav_port | string | length) > 0)
+      | ternary(
+        [
+          {
+            'name': 'CLAMAV_PORT',
+            'value': vaultwarden_clamav_port
+          }
+        ],
+        []
+      )
+    )
+    + (
+      ((vaultwarden_smtp_host | string | length) > 0)
+      | ternary(
+        [
+          {
+            'name': 'SMTP_HOST',
+            'value': vaultwarden_smtp_host
+          }
+        ],
+        []
+      )
+    )
+    + (
+      ((vaultwarden_smtp_port | string | length) > 0)
+      | ternary(
+        [
+          {
+            'name': 'SMTP_PORT',
+            'value': vaultwarden_smtp_port
+          }
+        ],
+        []
+      )
+    )
+    + (
+      ((vaultwarden_smtp_security | length) > 0)
+      | ternary(
+        [
+          {
+            'name': 'SMTP_SECURITY',
+            'value': vaultwarden_smtp_security
+          }
+        ],
+        []
+      )
+    )
+    + (
+      ((vaultwarden_smtp_username | length) > 0)
+      | ternary(
+        [
+          {
+            'name': 'SMTP_USERNAME',
+            'value': vaultwarden_smtp_username
+          }
+        ],
+        []
+      )
+    )
+    + (
+      ((vaultwarden_smtp_password | length) > 0)
+      | ternary(
+        [
+          {
+            'name': 'SMTP_PASSWORD',
+            'value': vaultwarden_smtp_password
+          }
+        ],
+        []
+      )
+    )
+    + (
+      ((vaultwarden_smtp_timeout | string | length) > 0)
+      | ternary(
+        [
+          {
+            'name': 'SMTP_TIMEOUT',
+            'value': vaultwarden_smtp_timeout
+          }
+        ],
+        []
+      )
+    )
+    + (
+      ((vaultwarden_smtp_from | length) > 0)
+      | ternary(
+        [
+          {
+            'name': 'SMTP_FROM',
+            'value': vaultwarden_smtp_from
+          }
+        ],
+        []
+      )
+    )
+    + (
+      ((vaultwarden_offline_vault_timeout | string | length) > 0)
+      | ternary(
+        [
+          {
+            'name': 'OFFLINE_VAULT_TIMEOUT',
+            'value': vaultwarden_offline_vault_timeout
           }
         ],
         []
