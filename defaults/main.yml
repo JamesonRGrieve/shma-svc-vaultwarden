@@ -5,58 +5,9 @@ service_image: docker.io/vaultwarden/server:1.32.5-alpine
 version: "1.32.5"
 needs_container_runtime: true
 service_ip: "{{ vaultwarden_container_ip }}"
-service_ports: >-
-  {{
-    [
-      {
-        'target': 80,
-        'published': vaultwarden_service_port,
-        'protocol': 'tcp',
-        'host_ip': vaultwarden_bind_address
-      }
-    ]
-    + (
-      vaultwarden_websocket_enabled
-      | ternary(
-        [
-          {
-            'target': 3012,
-            'published': vaultwarden_websocket_port,
-            'protocol': 'tcp',
-            'host_ip': vaultwarden_bind_address
-          }
-        ],
-        []
-      )
-    )
-  }}
+service_ports: "{{ vaultwarden_service_ports }}"
 service_env: "{{ vaultwarden_service_env }}"
-service_volumes: >-
-  {{
-    [
-      {
-        'name': 'data',
-        'source': vaultwarden_data_volume,
-        'target': '/data',
-        'driver': 'local',
-        'size': vaultwarden_data_volume_size_gb ~ 'Gi'
-      }
-    ]
-    + (
-      (vaultwarden_email_templates_path | string | length) > 0
-      | ternary(
-        [
-          {
-            'name': 'email-templates',
-            'source': vaultwarden_email_templates_path,
-            'target': '/etc/vaultwarden/email-templates',
-            'type': 'bind'
-          }
-        ],
-        []
-      )
-    )
-  }}
+service_volumes: "{{ vaultwarden_service_volumes }}"
 service_resources:
   memory_mb: "{{ vaultwarden_container_memory_mb }}"
   cpu_cores: "{{ vaultwarden_container_cpu_cores }}"
@@ -114,7 +65,7 @@ storage:
       hooks:
         sqlite:
           enabled: {{ vaultwarden_database_backend == 'sqlite' }}
-          command: "sqlite3 /data/db.sqlite3 '.backup "/data/db.sqlite3.backup"'"
+          command: "sqlite3 {{ vaultwarden_data_volume_target }}/db.sqlite3 '.backup "{{ vaultwarden_data_volume_target }}/db.sqlite3.backup"'"
         postgres:
           enabled: {{ vaultwarden_database_backend == 'postgres' }}
           command: "pg_dump --dbname='${DATABASE_URL}' --file=/data/vaultwarden-db.sql"
@@ -125,14 +76,13 @@ runtime_templates:
   kubernetes: kubernetes.yml.j2
   baremetal: baremetal.yml.j2
 secrets:
-  env:
-    - name: ADMIN_TOKEN
-      value: "{{ vaultwarden_admin_token }}"
+  env: "{{ vaultwarden_secret_env }}"
 
 vaultwarden_service_port: 8000
 vaultwarden_websocket_port: 3012
 vaultwarden_bind_address: 127.0.0.1
 vaultwarden_data_volume: vaultwarden-data
+vaultwarden_data_volume_target: /data
 vaultwarden_data_volume_size_gb: 10
 vaultwarden_container_vmid: 260
 vaultwarden_container_ip: 192.168.100.17
@@ -149,6 +99,7 @@ vaultwarden_domain: "{{ lookup('env', 'VAULTWARDEN_DOMAIN') | default('https://v
 vaultwarden_database_url: "{{ lookup('env', 'VAULTWARDEN_DATABASE_URL') | default('/data/db.sqlite3', true) }}"
 vaultwarden_database_url_secret: "{{ lookup('env', 'VAULTWARDEN_DATABASE_URL_SECRET') | default('', true) }}"
 vaultwarden_effective_database_url: "{{ vaultwarden_database_url_secret if (vaultwarden_database_url_secret | length) > 0 else vaultwarden_database_url }}"
+vaultwarden_force_backend_switch: false
 vaultwarden_admin_token: "{{ lookup('env', 'VAULTWARDEN_ADMIN_TOKEN') | default('change-me-vaultwarden-admin', true) }}"
 vaultwarden_signups_allowed: "{{ lookup('env', 'VAULTWARDEN_SIGNUPS_ALLOWED') | default('false', true) | bool }}"
 vaultwarden_invitations_allowed: "{{ lookup('env', 'VAULTWARDEN_INVITATIONS_ALLOWED') | default('true', true) | bool }}"
@@ -157,17 +108,22 @@ vaultwarden_websocket_enabled: "{{ lookup('env', 'VAULTWARDEN_WEBSOCKET_ENABLED'
 vaultwarden_require_2fa: "{{ lookup('env', 'VAULTWARDEN_REQUIRE_2FA') | default('false', true) | bool }}"
 vaultwarden_log_level: "{{ lookup('env', 'VAULTWARDEN_LOG_LEVEL') | default('info', true) }}"
 vaultwarden_extended_logging: "{{ lookup('env', 'VAULTWARDEN_EXTENDED_LOGGING') | default('true', true) | bool }}"
+vaultwarden_debug_mode: "{{ lookup('env', 'VAULTWARDEN_DEBUG_MODE') | default('false', true) | bool }}"
+# Default to UTC so aggregated logs remain comparable across regions.
+# Override with an IANA timezone string (e.g., "America/New_York") if you prefer local timestamps.
 vaultwarden_timezone: "{{ lookup('env', 'VAULTWARDEN_TZ') | default('UTC', true) }}"
 vaultwarden_kubernetes_namespace: security
 vaultwarden_kubernetes_replicas: 1
+vaultwarden_database_pvc_name: ""
 vaultwarden_cache_tmpfs_enabled: false
 vaultwarden_cache_tmpfs_size: 64Mi
 vaultwarden_rocket_workers: "{{ lookup('env', 'VAULTWARDEN_ROCKET_WORKERS') | default('', true) }}"
 vaultwarden_send_file_max_bytes: "{{ lookup('env', 'VAULTWARDEN_SEND_FILE_MAX_BYTES') | default('', true) }}"
 vaultwarden_database_max_conns: "{{ lookup('env', 'VAULTWARDEN_DATABASE_MAX_CONNS') | default('', true) }}"
+vaultwarden_database_max_conns_effective: "{{ vaultwarden_database_max_conns }}"
 vaultwarden_admin_ip_allowlist: []
-vaultwarden_max_attachment_size: "{{ lookup('env', 'VAULTWARDEN_MAX_ATTACHMENT_SIZE') | default('', true) }}"
-vaultwarden_attachment_storage_quota: "{{ lookup('env', 'VAULTWARDEN_ATTACHMENT_STORAGE_QUOTA') | default('', true) }}"
+vaultwarden_max_attachment_size: "{{ lookup('env', 'VAULTWARDEN_MAX_ATTACHMENT_SIZE') | default('10485760', true) }}"
+vaultwarden_attachment_storage_quota: "{{ lookup('env', 'VAULTWARDEN_ATTACHMENT_STORAGE_QUOTA') | default('1073741824', true) }}"
 vaultwarden_attachments_backend: "{{ lookup('env', 'VAULTWARDEN_ATTACHMENTS_BACKEND') | default('filesystem', true) }}"
 vaultwarden_attachments_s3_endpoint: "{{ lookup('env', 'VAULTWARDEN_ATTACHMENTS_S3_ENDPOINT') | default('', true) }}"
 vaultwarden_attachments_s3_region: "{{ lookup('env', 'VAULTWARDEN_ATTACHMENTS_S3_REGION') | default('', true) }}"
@@ -184,317 +140,181 @@ vaultwarden_smtp_security: "{{ lookup('env', 'VAULTWARDEN_SMTP_SECURITY') | defa
 vaultwarden_smtp_username: "{{ lookup('env', 'VAULTWARDEN_SMTP_USERNAME') | default('', true) }}"
 vaultwarden_smtp_password: "{{ lookup('env', 'VAULTWARDEN_SMTP_PASSWORD') | default('', true) }}"
 vaultwarden_smtp_from: "{{ lookup('env', 'VAULTWARDEN_SMTP_FROM') | default('', true) }}"
-vaultwarden_smtp_timeout: "{{ lookup('env', 'VAULTWARDEN_SMTP_TIMEOUT') | default('', true) }}"
+vaultwarden_smtp_auth_mechanism: "{{ lookup('env', 'VAULTWARDEN_SMTP_AUTH_MECHANISM') | default('', true) }}"
+vaultwarden_smtp_timeout: "{{ lookup('env', 'VAULTWARDEN_SMTP_TIMEOUT') | default('15', true) }}"
 vaultwarden_email_templates_path: "{{ lookup('env', 'VAULTWARDEN_EMAIL_TEMPLATES_PATH') | default('', true) }}"
 vaultwarden_read_only_root_filesystem: true
-vaultwarden_service_env: >-
+vaultwarden_service_ports: []
+
+vaultwarden_service_volumes: []
+
+vaultwarden_service_env: []
+
+vaultwarden_env_mapping:
+  DOMAIN:
+    name: DOMAIN
+    value: "{{ vaultwarden_domain }}"
+    required: true
+  ROCKET_PORT:
+    name: ROCKET_PORT
+    value: "80"
+    required: true
+  WEBSOCKET_ENABLED:
+    name: WEBSOCKET_ENABLED
+    value: "{{ vaultwarden_websocket_enabled | ternary('true', 'false') }}"
+    required: true
+  WEBSOCKET_PORT:
+    name: WEBSOCKET_PORT
+    value: "{{ vaultwarden_websocket_port | string }}"
+    required: true
+  SIGNUPS_ALLOWED:
+    name: SIGNUPS_ALLOWED
+    value: "{{ vaultwarden_signups_allowed | ternary('true', 'false') }}"
+    required: true
+  INVITATIONS_ALLOWED:
+    name: INVITATIONS_ALLOWED
+    value: "{{ vaultwarden_invitations_allowed | ternary('true', 'false') }}"
+    required: true
+  SHOW_PASSWORD_HINT:
+    name: SHOW_PASSWORD_HINT
+    value: "{{ vaultwarden_show_password_hint | ternary('true', 'false') }}"
+    required: true
+  LOG_LEVEL:
+    name: LOG_LEVEL
+    value: "{{ vaultwarden_log_level }}"
+    required: true
+  EXTENDED_LOGGING:
+    name: EXTENDED_LOGGING
+    value: "{{ vaultwarden_extended_logging | ternary('true', 'false') }}"
+    required: true
+  TZ:
+    name: TZ
+    value: "{{ vaultwarden_timezone }}"
+    required: true
+  DATABASE_URL:
+    name: DATABASE_URL
+    value: "{{ vaultwarden_effective_database_url }}"
+    required: true
+  ROCKET_WORKERS:
+    name: ROCKET_WORKERS
+    value: "{{ vaultwarden_rocket_workers }}"
+    required: false
+  SEND_FILE_MAX_BYTES:
+    name: SEND_FILE_MAX_BYTES
+    value: "{{ vaultwarden_send_file_max_bytes }}"
+    required: false
+  DATABASE_MAX_CONNS:
+    name: DATABASE_MAX_CONNS
+    value: "{{ vaultwarden_database_max_conns_effective }}"
+    required: false
+  REQUIRE_2FA:
+    name: REQUIRE_2FA
+    value: "{{ vaultwarden_require_2fa | ternary('true', '') }}"
+    required: false
+  ADMIN_IP_WHITELIST:
+    name: ADMIN_IP_WHITELIST
+    value: "{{ vaultwarden_admin_ip_allowlist if vaultwarden_admin_ip_allowlist is string else (vaultwarden_admin_ip_allowlist | join(',')) }}"
+    required: false
+  ATTACHMENTS_SIZE_LIMIT:
+    name: ATTACHMENTS_SIZE_LIMIT
+    value: "{{ vaultwarden_max_attachment_size }}"
+    required: false
+  ATTACHMENTS_LIMIT:
+    name: ATTACHMENTS_LIMIT
+    value: "{{ vaultwarden_attachment_storage_quota }}"
+    required: false
+  ATTACHMENTS_BACKEND:
+    name: ATTACHMENTS_BACKEND
+    value: "{{ vaultwarden_attachments_backend }}"
+    required: true
+  ATTACHMENTS_S3_ENDPOINT:
+    name: ATTACHMENTS_S3_ENDPOINT
+    value: "{{ vaultwarden_attachments_s3_endpoint }}"
+    required: false
+  ATTACHMENTS_S3_REGION:
+    name: ATTACHMENTS_S3_REGION
+    value: "{{ vaultwarden_attachments_s3_region }}"
+    required: false
+  ATTACHMENTS_S3_BUCKET:
+    name: ATTACHMENTS_S3_BUCKET
+    value: "{{ vaultwarden_attachments_s3_bucket }}"
+    required: false
+  ATTACHMENTS_S3_PATH_STYLE:
+    name: ATTACHMENTS_S3_PATH_STYLE
+    value: "{{ '' if (vaultwarden_attachments_s3_path_style | string | length) == 0 else ((vaultwarden_attachments_s3_path_style | string | lower == 'true') | ternary('true', 'false')) }}"
+    required: false
+  CLAMAV_HOST:
+    name: CLAMAV_HOST
+    value: "{{ vaultwarden_clamav_host }}"
+    required: false
+  CLAMAV_PORT:
+    name: CLAMAV_PORT
+    value: "{{ vaultwarden_clamav_port }}"
+    required: false
+  SMTP_HOST:
+    name: SMTP_HOST
+    value: "{{ vaultwarden_smtp_host }}"
+    required: false
+  SMTP_PORT:
+    name: SMTP_PORT
+    value: "{{ vaultwarden_smtp_port }}"
+    required: false
+  SMTP_SECURITY:
+    name: SMTP_SECURITY
+    value: "{{ vaultwarden_smtp_security }}"
+    required: false
+  SMTP_USERNAME:
+    name: SMTP_USERNAME
+    value: "{{ vaultwarden_smtp_username }}"
+    required: false
+  SMTP_PASSWORD:
+    name: SMTP_PASSWORD
+    value: "{{ vaultwarden_smtp_password }}"
+    required: false
+  SMTP_AUTH_MECHANISM:
+    name: SMTP_AUTH_MECHANISM
+    value: "{{ vaultwarden_smtp_auth_mechanism }}"
+    required: false
+  SMTP_TIMEOUT:
+    name: SMTP_TIMEOUT
+    value: "{{ vaultwarden_smtp_timeout }}"
+    required: false
+  SMTP_FROM:
+    name: SMTP_FROM
+    value: "{{ vaultwarden_smtp_from }}"
+    required: false
+  OFFLINE_VAULT_TIMEOUT:
+    name: OFFLINE_VAULT_TIMEOUT
+    value: "{{ vaultwarden_offline_vault_timeout }}"
+    required: false
+
+vaultwarden_secret_env: >-
   {{
-    [
-      {
-        'name': 'DOMAIN',
-        'value': vaultwarden_domain
-      },
-      {
-        'name': 'ROCKET_PORT',
-        'value': '80'
-      },
-      {
-        'name': 'WEBSOCKET_ENABLED',
-        'value': vaultwarden_websocket_enabled | ternary('true', 'false')
-      },
-      {
-        'name': 'WEBSOCKET_PORT',
-        'value': vaultwarden_websocket_port | string
-      },
-      {
-        'name': 'SIGNUPS_ALLOWED',
-        'value': vaultwarden_signups_allowed | ternary('true', 'false')
-      },
-      {
-        'name': 'INVITATIONS_ALLOWED',
-        'value': vaultwarden_invitations_allowed | ternary('true', 'false')
-      },
-      {
-        'name': 'SHOW_PASSWORD_HINT',
-        'value': vaultwarden_show_password_hint | ternary('true', 'false')
-      },
-      {
-        'name': 'LOG_LEVEL',
-        'value': vaultwarden_log_level
-      },
-      {
-        'name': 'EXTENDED_LOGGING',
-        'value': vaultwarden_extended_logging | ternary('true', 'false')
-      },
-      {
-        'name': 'TZ',
-        'value': vaultwarden_timezone
-      },
-      {
-        'name': 'DATABASE_URL',
-        'value': vaultwarden_effective_database_url
-      }
-    ]
-    + (
-      ((vaultwarden_rocket_workers | length) > 0)
-      | ternary(
-        [
-          {
-            'name': 'ROCKET_WORKERS',
-            'value': vaultwarden_rocket_workers
-          }
-        ],
-        []
-      )
-    )
-    + (
-      ((vaultwarden_send_file_max_bytes | length) > 0)
-      | ternary(
-        [
-          {
-            'name': 'SEND_FILE_MAX_BYTES',
-            'value': vaultwarden_send_file_max_bytes
-          }
-        ],
-        []
-      )
-    )
-    + (
-      ((vaultwarden_database_max_conns | string | length) > 0)
-      | ternary(
-        [
-          {
-            'name': 'DATABASE_MAX_CONNS',
-            'value': vaultwarden_database_max_conns
-          }
-        ],
-        []
-      )
-    )
-    + (
-      vaultwarden_require_2fa
-      | ternary(
-        [
-          {
-            'name': 'REQUIRE_2FA',
-            'value': 'true'
-          }
-        ],
-        []
-      )
-    )
-    + (
-      (vaultwarden_admin_ip_allowlist | length) > 0
-      | ternary(
-        [
-          {
-            'name': 'ADMIN_IP_WHITELIST',
-            'value': (
-              vaultwarden_admin_ip_allowlist
-              if vaultwarden_admin_ip_allowlist is string
-              else (vaultwarden_admin_ip_allowlist | join(','))
-            )
-          }
-        ],
-        []
-      )
-    )
-    + (
-      (vaultwarden_max_attachment_size | string | length) > 0
-      | ternary(
-        [
-          {
-            'name': 'ATTACHMENTS_SIZE_LIMIT',
-            'value': vaultwarden_max_attachment_size
-          }
-        ],
-        []
-      )
-    )
-    + (
-      (vaultwarden_attachment_storage_quota | string | length) > 0
-      | ternary(
-        [
-          {
-            'name': 'ATTACHMENTS_LIMIT',
-            'value': vaultwarden_attachment_storage_quota
-          }
-        ],
-        []
-      )
-    )
-    + [
-      {
-        'name': 'ATTACHMENTS_BACKEND',
-        'value': vaultwarden_attachments_backend
-      }
-    ]
-    + (
-      (vaultwarden_attachments_backend | lower) == 's3'
-      | ternary(
-        [
-          {
-            'name': 'ATTACHMENTS_S3_ENDPOINT',
-            'value': vaultwarden_attachments_s3_endpoint
-          },
-          {
-            'name': 'ATTACHMENTS_S3_REGION',
-            'value': vaultwarden_attachments_s3_region
-          },
-          {
-            'name': 'ATTACHMENTS_S3_BUCKET',
-            'value': vaultwarden_attachments_s3_bucket
-          },
-          {
-            'name': 'ATTACHMENTS_S3_ACCESS_KEY',
-            'value': vaultwarden_attachments_s3_access_key
-          },
-          {
-            'name': 'ATTACHMENTS_S3_SECRET_KEY',
-            'value': vaultwarden_attachments_s3_secret_key
-          }
-        ]
-        | selectattr('value', 'defined')
-        | selectattr('value', 'truthy')
-        | list
-        + (
-          (vaultwarden_attachments_s3_path_style | string | length) > 0
-          | ternary(
-            [
-              {
-                'name': 'ATTACHMENTS_S3_PATH_STYLE',
-                'value': (
-                  (
-                    (vaultwarden_attachments_s3_path_style | string | lower) == 'true'
-                  )
-                  | ternary('true', 'false')
-                )
-              }
-            ],
-            []
-          )
-        ),
-        []
-      )
-    )
-    + (
-      ((vaultwarden_clamav_host | string | length) > 0)
-      | ternary(
-        [
-          {
-            'name': 'CLAMAV_HOST',
-            'value': vaultwarden_clamav_host
-          }
-        ],
-        []
-      )
-    )
-    + (
-      ((vaultwarden_clamav_port | string | length) > 0)
-      | ternary(
-        [
-          {
-            'name': 'CLAMAV_PORT',
-            'value': vaultwarden_clamav_port
-          }
-        ],
-        []
-      )
-    )
-    + (
-      ((vaultwarden_smtp_host | string | length) > 0)
-      | ternary(
-        [
-          {
-            'name': 'SMTP_HOST',
-            'value': vaultwarden_smtp_host
-          }
-        ],
-        []
-      )
-    )
-    + (
-      ((vaultwarden_smtp_port | string | length) > 0)
-      | ternary(
-        [
-          {
-            'name': 'SMTP_PORT',
-            'value': vaultwarden_smtp_port
-          }
-        ],
-        []
-      )
-    )
-    + (
-      ((vaultwarden_smtp_security | length) > 0)
-      | ternary(
-        [
-          {
-            'name': 'SMTP_SECURITY',
-            'value': vaultwarden_smtp_security
-          }
-        ],
-        []
-      )
-    )
-    + (
-      ((vaultwarden_smtp_username | length) > 0)
-      | ternary(
-        [
-          {
-            'name': 'SMTP_USERNAME',
-            'value': vaultwarden_smtp_username
-          }
-        ],
-        []
-      )
-    )
-    + (
-      ((vaultwarden_smtp_password | length) > 0)
-      | ternary(
-        [
-          {
-            'name': 'SMTP_PASSWORD',
-            'value': vaultwarden_smtp_password
-          }
-        ],
-        []
-      )
-    )
-    + (
-      ((vaultwarden_smtp_timeout | string | length) > 0)
-      | ternary(
-        [
-          {
-            'name': 'SMTP_TIMEOUT',
-            'value': vaultwarden_smtp_timeout
-          }
-        ],
-        []
-      )
-    )
-    + (
-      ((vaultwarden_smtp_from | length) > 0)
-      | ternary(
-        [
-          {
-            'name': 'SMTP_FROM',
-            'value': vaultwarden_smtp_from
-          }
-        ],
-        []
-      )
-    )
-    + (
-      ((vaultwarden_offline_vault_timeout | string | length) > 0)
-      | ternary(
-        [
-          {
-            'name': 'OFFLINE_VAULT_TIMEOUT',
-            'value': vaultwarden_offline_vault_timeout
-          }
-        ],
-        []
+    (
+      [
+        {
+          'name': 'ADMIN_TOKEN',
+          'value': vaultwarden_admin_token
+        }
+      ]
+      + (
+        (vaultwarden_attachments_backend | lower) == 's3'
+        | ternary(
+          [
+            {
+              'name': 'ATTACHMENTS_S3_ACCESS_KEY',
+              'value': vaultwarden_attachments_s3_access_key
+            },
+            {
+              'name': 'ATTACHMENTS_S3_SECRET_KEY',
+              'value': vaultwarden_attachments_s3_secret_key
+            }
+          ]
+          | selectattr('value', 'defined')
+          | selectattr('value', 'truthy')
+          | list,
+          []
+        )
       )
     )
   }}
@@ -598,7 +418,7 @@ vaultwarden_backup_excludes: >-
   }}
 vaultwarden_database_backend: >-
   {{
-    'postgres' if vaultwarden_effective_database_url is match('^postgres(ql)?://')
-    else 'sqlite' if vaultwarden_effective_database_url is match('^(/|sqlite)')
+    'postgres' if vaultwarden_effective_database_url is match('^postgres(ql)?://[^/]+/')
+    else 'sqlite' if vaultwarden_effective_database_url is match('^(sqlite://)?/.+\\.sqlite3?$')
     else 'custom'
   }}
