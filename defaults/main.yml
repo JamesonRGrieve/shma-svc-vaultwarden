@@ -1,0 +1,146 @@
+service_id: vaultwarden
+service_name: vaultwarden
+service_unit_name: vaultwarden
+service_image: docker.io/vaultwarden/server:1.32.5-alpine
+version: "1.32.5"
+needs_container_runtime: true
+service_ip: "{{ vaultwarden_container_ip }}"
+service_ports:
+  - target: 80
+    published: {{ vaultwarden_service_port }}
+    protocol: tcp
+  - target: 3012
+    published: {{ vaultwarden_websocket_port }}
+    protocol: tcp
+service_env:
+  - name: DOMAIN
+    value: "{{ vaultwarden_domain }}"
+  - name: ROCKET_PORT
+    value: "80"
+  - name: WEBSOCKET_ENABLED
+    value: "{{ vaultwarden_websocket_enabled | ternary('true', 'false') }}"
+  - name: WEBSOCKET_PORT
+    value: "3012"
+  - name: SIGNUPS_ALLOWED
+    value: "{{ vaultwarden_signups_allowed | ternary('true', 'false') }}"
+  - name: INVITATIONS_ALLOWED
+    value: "{{ vaultwarden_invitations_allowed | ternary('true', 'false') }}"
+  - name: SHOW_PASSWORD_HINT
+    value: "{{ vaultwarden_show_password_hint | ternary('true', 'false') }}"
+  - name: LOG_LEVEL
+    value: "{{ vaultwarden_log_level }}"
+  - name: EXTENDED_LOGGING
+    value: "{{ vaultwarden_extended_logging | ternary('true', 'false') }}"
+  - name: TZ
+    value: "{{ vaultwarden_timezone }}"
+  - name: DATABASE_URL
+    value: "{{ vaultwarden_database_url }}"
+service_volumes:
+  - name: data
+    source: "{{ vaultwarden_data_volume }}"
+    target: /data
+    driver: local
+    size: "{{ vaultwarden_data_volume_size_gb }}Gi"
+service_resources:
+  memory_mb: "{{ vaultwarden_container_memory_mb }}"
+  cpu_cores: "{{ vaultwarden_container_cpu_cores }}"
+service_namespace: "{{ vaultwarden_kubernetes_namespace }}"
+service_replicas: "{{ vaultwarden_kubernetes_replicas }}"
+service_container:
+  vmid: "{{ vaultwarden_container_vmid }}"
+  hostname: "{{ service_name }}"
+  ostemplate: "{{ vaultwarden_container_template }}"
+  disk: "{{ vaultwarden_container_storage_gb }}"
+  cores: "{{ vaultwarden_container_cpu_cores }}"
+  memory: "{{ vaultwarden_container_memory_mb }}"
+  swap: "{{ vaultwarden_container_swap_mb }}"
+  bridge: "{{ vaultwarden_container_bridge }}"
+  cidr: "{{ vaultwarden_container_cidr }}"
+  gateway: "{{ vaultwarden_container_gateway }}"
+  interface: "{{ vaultwarden_container_interface }}"
+  onboot: yes
+  unprivileged: yes
+  features: nesting=1,keyctl=1
+service_security:
+  run_as_user: 1000
+  run_as_group: 1000
+  read_only_root_filesystem: false
+  capabilities_drop:
+    - ALL
+  no_new_privileges: true
+service_packages:
+  - sqlite3
+  - curl
+service_services:
+  - name: vaultwarden
+    enabled: true
+    state: started
+requires: []
+exports:
+  env:
+    - name: VAULTWARDEN_URL
+      value: "{{ vaultwarden_domain }}"
+      description: Public URL for Bitwarden clients
+    - name: VAULTWARDEN_ADMIN_URL
+      value: "{{ vaultwarden_domain }}/admin"
+      description: Admin panel URL
+mounts:
+  persistent_volumes:
+    - name: data
+      path: /data
+  ephemeral_mounts:
+    - name: vaultwarden-tmp
+      path: /tmp
+      apply_to: [docker, podman, kubernetes, proxmox, baremetal]
+      medium: Memory
+      size: 128Mi
+health:
+  cmd:
+    - sh
+    - -c
+    - "curl -fsS http://127.0.0.1/alive || exit 1"
+  interval: 30s
+  timeout: 10s
+  retries: 3
+storage:
+  - name: data
+    path: /data
+    size: "{{ vaultwarden_data_volume_size_gb }}G"
+runtime_templates:
+  proxmox: proxmox.yml.j2
+  docker: docker.yml.j2
+  podman: podman.yml.j2
+  kubernetes: kubernetes.yml.j2
+  baremetal: baremetal.yml.j2
+secrets:
+  env:
+    - name: ADMIN_TOKEN
+      value: "{{ vaultwarden_admin_token }}"
+
+vaultwarden_service_port: 8000
+vaultwarden_websocket_port: 3012
+vaultwarden_data_volume: vaultwarden-data
+vaultwarden_data_volume_size_gb: 10
+vaultwarden_container_vmid: 260
+vaultwarden_container_ip: 192.168.100.17
+vaultwarden_container_gateway: 192.168.100.1
+vaultwarden_container_cidr: 24
+vaultwarden_container_bridge: vmbr0
+vaultwarden_container_interface: eth0
+vaultwarden_container_cpu_cores: 1
+vaultwarden_container_memory_mb: 1024
+vaultwarden_container_swap_mb: 1024
+vaultwarden_container_storage_gb: "{{ vaultwarden_data_volume_size_gb }}"
+vaultwarden_container_template: local:vztmpl/ubuntu-24.04-standard_24.04-2_amd64.tar.zst
+vaultwarden_domain: "{{ lookup('env', 'VAULTWARDEN_DOMAIN') | default('https://vault.example.com', true) }}"
+vaultwarden_database_url: "{{ lookup('env', 'VAULTWARDEN_DATABASE_URL') | default('/data/db.sqlite3', true) }}"
+vaultwarden_admin_token: "{{ lookup('env', 'VAULTWARDEN_ADMIN_TOKEN') | default('change-me-vaultwarden-admin', true) }}"
+vaultwarden_signups_allowed: "{{ lookup('env', 'VAULTWARDEN_SIGNUPS_ALLOWED') | default('false', true) | bool }}"
+vaultwarden_invitations_allowed: "{{ lookup('env', 'VAULTWARDEN_INVITATIONS_ALLOWED') | default('true', true) | bool }}"
+vaultwarden_show_password_hint: "{{ lookup('env', 'VAULTWARDEN_SHOW_PASSWORD_HINT') | default('false', true) | bool }}"
+vaultwarden_websocket_enabled: "{{ lookup('env', 'VAULTWARDEN_WEBSOCKET_ENABLED') | default('true', true) | bool }}"
+vaultwarden_log_level: "{{ lookup('env', 'VAULTWARDEN_LOG_LEVEL') | default('info', true) }}"
+vaultwarden_extended_logging: "{{ lookup('env', 'VAULTWARDEN_EXTENDED_LOGGING') | default('true', true) | bool }}"
+vaultwarden_timezone: "{{ lookup('env', 'VAULTWARDEN_TZ') | default('UTC', true) }}"
+vaultwarden_kubernetes_namespace: security
+vaultwarden_kubernetes_replicas: 1
